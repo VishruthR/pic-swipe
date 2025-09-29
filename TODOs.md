@@ -1,4 +1,0 @@
-- [ ] Make trash page functional
-- [ ] new pictures should slide in from above
-- [ ] add more information for each picture (time, location, other useful info)
-- [x] Trashed photos don't always display since we only check the first 1000

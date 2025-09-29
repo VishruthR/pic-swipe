@@ -1,50 +1,19 @@
-# Welcome to your Expo app 👋
+# Pic Swipe
 
-This is an [Expo](https://expo.dev) project created with [`create-expo-app`](https://www.npmjs.com/package/create-expo-app).
+[link to substack I write eventually](tbd)
 
-## Get started
+I wanted to gamify the process of deleting old photos from my camera roll. There's lots of very similar apps on the app store, but they have annoying freemium models or excessive features that I didn't want. So, I vibe coded a quick version for my personal use. Feel free to use this app however you want, just keep in mind that it is probably buggy.
 
-1. Install dependencies
+### Features
 
-   ```bash
-   npm install
-   ```
+Photos from your camera roll will be randomy selected. You can swipe on each photo to either keep it or delete it. Photos that are deleted are placed in the app's "Trash". You can recover a photo from the trash page by clicking on it. When you're ready to commit to deleting your photos, you can empty the trash. 
 
-2. Start the app
+I purposely added lots of alerts before emptying the trash to ensure users (me) did not accidentally delete photos. As another layer of protection, you can still recover your images from your phone's recently deleted.
 
-   ```bash
-   npx expo start
-   ```
+### Disclaimers
 
-In the output, you'll find options to open the app in a
+This app was designed and tested on my phone (Apple iPhone 16 IOS 18.6.2). It is designed only for photos from your phones camera roll. I run it on expo go because I didn't want to pay Apple's insane $99/year developer fee. 
 
-- [development build](https://docs.expo.dev/develop/development-builds/introduction/)
-- [Android emulator](https://docs.expo.dev/workflow/android-studio-emulator/)
-- [iOS simulator](https://docs.expo.dev/workflow/ios-simulator/)
-- [Expo Go](https://expo.dev/go), a limited sandbox for trying out app development with Expo
+I wrote this app primarily using Cursor with `claude-sonnet-4`. The code is functional, it is not great.
 
-You can start developing by editing the files inside the **app** directory. This project uses [file-based routing](https://docs.expo.dev/router/introduction).
-
-## Get a fresh project
-
-When you're ready, run:
-
-```bash
-npm run reset-project
-```
-
-This command will move the starter code to the **app-example** directory and create a blank **app** directory where you can start developing.
-
-## Learn more
-
-To learn more about developing your project with Expo, look at the following resources:
-
-- [Expo documentation](https://docs.expo.dev/): Learn fundamentals, or go into advanced topics with our [guides](https://docs.expo.dev/guides).
-- [Learn Expo tutorial](https://docs.expo.dev/tutorial/introduction/): Follow a step-by-step tutorial where you'll create a project that runs on Android, iOS, and the web.
-
-## Join the community
-
-Join our community of developers creating universal apps.
-
-- [Expo on GitHub](https://github.com/expo/expo): View our open source platform and contribute.
-- [Discord community](https://chat.expo.dev): Chat with Expo users and ask questions.
+This app was designed to fit my needs. Feel free to fork it to make it fit yours.
