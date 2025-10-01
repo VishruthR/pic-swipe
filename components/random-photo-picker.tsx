@@ -1,7 +1,8 @@
+import { useMediaLibraryPermissions } from '@/hooks/use-media-library-permissions';
 import { TrashStorage } from '@/utils/trash-storage';
 import { Image } from 'expo-image';
 import * as MediaLibrary from 'expo-media-library';
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useState } from 'react';
 import { Dimensions, StyleSheet, TouchableOpacity, View } from 'react-native';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import Animated, {
@@ -31,7 +32,6 @@ const formatTime = (timestamp: number): string => {
 export default function RandomPhotoPicker() {
   const [currentPhoto, setCurrentPhoto] = useState<MediaLibrary.Asset | null>(null);
   const [currentPhotoInfo, setCurrentPhotoInfo] = useState<MediaLibrary.AssetInfo | null>(null);
-  const [permissionStatus, setPermissionStatus] = useState<MediaLibrary.PermissionStatus | null>(null);
   const [loading, setLoading] = useState(false);
   const [totalPhotoCount, setTotalPhotoCount] = useState(0);
   const [lastPhotoId, setLastPhotoId] = useState<string | null>(null);
@@ -46,50 +46,7 @@ export default function RandomPhotoPicker() {
   const slideInTranslateY = useSharedValue(0);
   const slideInOpacity = useSharedValue(1);
 
-  useEffect(() => {
-    checkPermissions();
-  }, []);
-
-  const checkPermissions = async () => {
-    const { status } = await MediaLibrary.getPermissionsAsync();
-    setPermissionStatus(status);
-    if (status === 'granted') {
-      initializePhotos();
-    }
-  };
-
-  const requestPermissions = async () => {
-    const { status } = await MediaLibrary.requestPermissionsAsync();
-    setPermissionStatus(status);
-    if (status === 'granted') {
-      initializePhotos();
-    }
-  };
-
-  const initializePhotos = async () => {
-    try {
-      setLoading(true);
-      setHasError(false);
-      
-      const totalAssets = await MediaLibrary.getAssetsAsync({
-        mediaType: 'photo',
-        first: 1,
-      });
-      
-      if (totalAssets.totalCount > 0) {
-        setTotalPhotoCount(totalAssets.totalCount);
-        await loadRandomPhoto();
-      } else {
-        setHasError(true);
-      }
-    } catch (error) {
-      setHasError(true);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const getRandomPhoto = async (excludeIds: string[] = []): Promise<MediaLibrary.Asset | null> => {
+  const getRandomPhoto = useCallback(async (excludeIds: string[] = []): Promise<MediaLibrary.Asset | null> => {
     if (totalPhotoCount === 0) return null;
     
     // Try 10 times to get a random photo
@@ -118,7 +75,7 @@ export default function RandomPhotoPicker() {
       }
     }
     return null;
-  };
+  }, [totalPhotoCount]);
 
   const animatePhotoIn = () => {
     translateX.value = 0;
@@ -132,7 +89,7 @@ export default function RandomPhotoPicker() {
     slideInOpacity.value = withTiming(1, {duration: 400});
   }
 
-  const loadRandomPhoto = async () => {
+  const loadRandomPhoto = useCallback(async () => {
     const photo = await getRandomPhoto([lastPhotoId || '']);
     if (photo) {
       setCurrentPhoto(photo);
@@ -149,15 +106,43 @@ export default function RandomPhotoPicker() {
 
       animatePhotoIn();
     }
-  };
+  }, [lastPhotoId, getRandomPhoto]);
+
+  const initializePhotos = useCallback(async () => {
+    try {
+      setLoading(true);
+      setHasError(false);
+      
+      const totalAssets = await MediaLibrary.getAssetsAsync({
+        mediaType: 'photo',
+        first: 1,
+      });
+      
+      if (totalAssets.totalCount > 0) {
+        setTotalPhotoCount(totalAssets.totalCount);
+        await loadRandomPhoto();
+      } else {
+        setHasError(true);
+      }
+    } catch (error) {
+      setHasError(true);
+    } finally {
+      setLoading(false);
+    }
+  }, [loadRandomPhoto]);
+
+  const { permissionStatus, requestPermissions } = useMediaLibraryPermissions({
+    onGranted: initializePhotos,
+  });
+
   
-  const loadNewPhoto = async () => {
+  const loadNewPhoto = useCallback(async () => {
     await loadRandomPhoto();
-  };
+  }, [loadRandomPhoto]);
 
-  const handleSkip = () => loadNewPhoto();
+  const handleSkip = useCallback(() => loadNewPhoto(), [loadNewPhoto]);
 
-  const handleDelete = async () => {
+  const handleDelete = useCallback(async () => {
     if (!currentPhoto) return;
     
     await TrashStorage.addToTrash(currentPhoto.id);
@@ -168,7 +153,7 @@ export default function RandomPhotoPicker() {
     } else {
       loadNewPhoto();
     }
-  };
+  }, [currentPhoto, totalPhotoCount, initializePhotos, loadNewPhoto]);
 
   const animateOut = (direction: 'left' | 'right') => {
     const targetX = direction === 'left' ? -screenWidth * 1.5 : screenWidth * 1.5;
@@ -210,17 +195,15 @@ export default function RandomPhotoPicker() {
     };
   });
 
-  if (permissionStatus !== 'granted') {
+  if (permissionStatus !== MediaLibrary.PermissionStatus.GRANTED) {
     return (
       <ThemedView style={styles.container}>
         <ThemedText style={styles.centerText}>
           {permissionStatus === null ? 'Checking permissions...' : 'Photo access required'}
         </ThemedText>
-        {permissionStatus === 'denied' && (
-          <TouchableOpacity style={styles.button} onPress={requestPermissions}>
-            <ThemedText style={styles.buttonText}>Grant Permission</ThemedText>
-          </TouchableOpacity>
-        )}
+        <TouchableOpacity style={styles.button} onPress={requestPermissions}>
+          <ThemedText style={styles.buttonText}>Grant Permission</ThemedText>
+        </TouchableOpacity>
       </ThemedView>
     );
   }

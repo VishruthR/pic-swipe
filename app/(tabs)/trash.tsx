@@ -1,10 +1,10 @@
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
+import { useMediaLibraryPermissions } from '@/hooks/use-media-library-permissions';
 import { TrashStorage } from '@/utils/trash-storage';
-import { useFocusEffect } from '@react-navigation/native';
 import { Image } from 'expo-image';
 import * as MediaLibrary from 'expo-media-library';
-import React, { useEffect, useState } from 'react';
+import React, { useState } from 'react';
 import { Alert, Dimensions, FlatList, StyleSheet, TouchableOpacity, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -15,31 +15,7 @@ const PHOTO_SIZE = (screenWidth - 60) / 3; // 3 photos per row with padding
 export default function TrashScreen() {
   const [trashedPhotos, setTrashedPhotos] = useState<MediaLibrary.Asset[]>([]);
   const [loading, setLoading] = useState(false);
-  const [permissionStatus, setPermissionStatus] = useState<MediaLibrary.PermissionStatus | null>(null);
   const insets = useSafeAreaInsets();
-
-  useEffect(() => {
-    checkPermissions();
-  }, []);
-
-  // Refresh trash when screen comes into focus
-  useFocusEffect(
-    React.useCallback(() => {
-      if (permissionStatus === 'granted') {
-        loadTrashedPhotos();
-      } else {
-        checkPermissions();
-      }
-    }, [])
-  );
-
-  const checkPermissions = async () => {
-    const { status } = await MediaLibrary.getPermissionsAsync();
-    setPermissionStatus(status);
-    if (status === 'granted') {
-      loadTrashedPhotos();
-    }
-  };
 
   const loadTrashedPhotos = async () => {
     try {
@@ -61,6 +37,11 @@ export default function TrashScreen() {
       setLoading(false);
     }
   };
+
+  const { permissionStatus } = useMediaLibraryPermissions({
+    onGranted: loadTrashedPhotos,
+    checkOnFocus: true,
+  });
 
   const handleEmptyTrash = () => {
     if (trashedPhotos.length === 0) return;
