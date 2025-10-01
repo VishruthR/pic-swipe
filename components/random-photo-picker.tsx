@@ -5,10 +5,10 @@ import React, { useEffect, useState } from 'react';
 import { Dimensions, StyleSheet, TouchableOpacity, View } from 'react-native';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import Animated, {
-    useAnimatedStyle,
-    useSharedValue,
-    withSpring,
-    withTiming
+  useAnimatedStyle,
+  useSharedValue,
+  withSpring,
+  withTiming
 } from 'react-native-reanimated';
 import { scheduleOnRN } from 'react-native-worklets';
 import { ThemedText } from './themed-text';
@@ -37,12 +37,12 @@ export default function RandomPhotoPicker() {
   const [lastPhotoId, setLastPhotoId] = useState<string | null>(null);
   const [hasError, setHasError] = useState(false);
   
-  // Animated values for current photo swipe gestures
+  // Swipe gesture values
   const translateX = useSharedValue(0);
   const rotate = useSharedValue(0);
   const opacity = useSharedValue(1);
   
-  // Animated values for new photo sliding in from top
+  // Photo slide-in values
   const slideInTranslateY = useSharedValue(0);
   const slideInOpacity = useSharedValue(1);
 
@@ -92,6 +92,7 @@ export default function RandomPhotoPicker() {
   const getRandomPhoto = async (excludeIds: string[] = []): Promise<MediaLibrary.Asset | null> => {
     if (totalPhotoCount === 0) return null;
     
+    // Try 10 times to get a random photo
     for (let attempt = 0; attempt < 10; attempt++) {
       const randomIndex = Math.floor(Math.random() * totalPhotoCount);
       

@@ -8,6 +8,7 @@ import React, { useEffect, useState } from 'react';
 import { Alert, Dimensions, FlatList, StyleSheet, TouchableOpacity, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+
 const { width: screenWidth } = Dimensions.get('window');
 const PHOTO_SIZE = (screenWidth - 60) / 3; // 3 photos per row with padding
 
@@ -50,7 +51,6 @@ export default function TrashScreen() {
         return;
       }
 
-      // Fetch trashed photos directly by their IDs using Promise.all for efficiency
       const assetPromises = trashIds.map(id => MediaLibrary.getAssetInfoAsync(id));
       const trashedPhotoAssets = await Promise.all(assetPromises);
 
@@ -102,7 +102,7 @@ export default function TrashScreen() {
           onPress: async () => {
             try {
               await TrashStorage.removeFromTrash(photo.id);
-              // Remove from local state immediately for better UX
+              // Remove from local state optimistically for better UX
               setTrashedPhotos(prev => prev.filter(p => p.id !== photo.id));
             } catch (error) {
               Alert.alert('Error', 'Failed to restore photo.');
