@@ -1,4 +1,5 @@
-- [ ] Figure out best way to run app
+- [x] Figure out best way to run app
     - Run through expo go locally
     - Publish it somehow (for free?)
+    - Published through eas, can you se expo previews to use app
 - [ ] Finish up README
