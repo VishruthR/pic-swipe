@@ -1,0 +1,6 @@
+- [ ] Clean up UI
+- [ ] Clean up code
+- [ ] Test & verify permissions
+- [ ] Make it so that you dont' need to refresh phtotos
+- [ ] Test doing > 100 swipes (or see if this would cause problem)
+- [ ] Ask cursor if it can spot any bugs or areas of improvement
