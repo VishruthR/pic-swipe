@@ -1,9 +1,3 @@
-- [ ] Clean up UI
-- [x] Test & verify permissions
-- [x] Make it so that you don't need to load phtotos
-- [x] Test doing > 100 swipes (or see if this would cause problem)
-- [ ] Ask cursor if it can spot any bugs or areas of improvement
-- [x] Refactor permissions into its own hook probably
 - [ ] Figure out best way to run app
     - Run through expo go locally
     - Publish it somehow (for free?)
