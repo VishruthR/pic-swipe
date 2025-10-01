@@ -36,6 +36,7 @@ export default function RandomPhotoPicker() {
   const [totalPhotoCount, setTotalPhotoCount] = useState(0);
   const [lastPhotoId, setLastPhotoId] = useState<string | null>(null);
   const [hasError, setHasError] = useState(false);
+  const [initialized, setInitialized] = useState(false);
   
   // Swipe gesture values
   const translateX = useSharedValue(0);
@@ -47,8 +48,6 @@ export default function RandomPhotoPicker() {
   const slideInOpacity = useSharedValue(1);
 
   const getRandomPhoto = useCallback(async (excludeIds: string[] = []): Promise<MediaLibrary.Asset | null> => {
-    if (totalPhotoCount === 0) return null;
-    
     // Try 10 times to get a random photo
     for (let attempt = 0; attempt < 10; attempt++) {
       const randomIndex = Math.floor(Math.random() * totalPhotoCount);
@@ -89,7 +88,10 @@ export default function RandomPhotoPicker() {
     slideInOpacity.value = withTiming(1, {duration: 400});
   }
 
-  const loadRandomPhoto = useCallback(async () => {
+  const loadRandomPhoto = useCallback(async (numPhotos: number | null = null) => {
+    // We use numPhotos as an argument in case state updates haven't gone through
+    if (numPhotos === 0 || (numPhotos === null && totalPhotoCount === 0)) return;
+
     const photo = await getRandomPhoto([lastPhotoId || '']);
     if (photo) {
       setCurrentPhoto(photo);
@@ -120,7 +122,7 @@ export default function RandomPhotoPicker() {
       
       if (totalAssets.totalCount > 0) {
         setTotalPhotoCount(totalAssets.totalCount);
-        await loadRandomPhoto();
+        await loadRandomPhoto(totalAssets.totalCount);
       } else {
         setHasError(true);
       }
@@ -128,13 +130,13 @@ export default function RandomPhotoPicker() {
       setHasError(true);
     } finally {
       setLoading(false);
+      setInitialized(true);
     }
   }, [loadRandomPhoto]);
 
   const { permissionStatus, requestPermissions } = useMediaLibraryPermissions({
     onGranted: initializePhotos,
   });
-
   
   const loadNewPhoto = useCallback(async () => {
     await loadRandomPhoto();
@@ -208,7 +210,7 @@ export default function RandomPhotoPicker() {
     );
   }
 
-  if (loading) {
+  if (loading || !initialized) {
     return (
       <ThemedView style={styles.container}>
         <ThemedText style={styles.centerText}>Loading photos...</ThemedText>
@@ -216,7 +218,8 @@ export default function RandomPhotoPicker() {
     );
   }
 
-  if (!currentPhoto || hasError) {
+
+  if (hasError || !currentPhoto) {
     return (
       <ThemedView style={styles.container}>
         <ThemedText style={styles.centerText}>
@@ -232,15 +235,15 @@ export default function RandomPhotoPicker() {
   return (
     <ThemedView style={styles.container}>
       <View style={styles.photoStackContainer}>
-        {/* Current photo - interactive with gestures and slide-in animation */}
         <GestureDetector gesture={panGesture}>
           <Animated.View style={[styles.photoContainer, animatedStyle]}>
-            <Image source={{ uri: currentPhoto.uri }} style={styles.photo} contentFit="contain" />
+            {currentPhoto && (
+              <Image source={{ uri: currentPhoto.uri }} style={styles.photo} contentFit="contain" />
+            )}
           </Animated.View>
         </GestureDetector>
       </View>
       
-      {/* Photo time display underneath the photo */}
       {currentPhotoInfo && (
         <ThemedText style={styles.photoTimeText}>
           {formatTime(currentPhotoInfo.creationTime)}

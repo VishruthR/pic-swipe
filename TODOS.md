@@ -1,6 +1,6 @@
 - [ ] Clean up UI
 - [x] Test & verify permissions
-- [ ] Make it so that you don't need to load phtotos
+- [x] Make it so that you don't need to load phtotos
 - [x] Test doing > 100 swipes (or see if this would cause problem)
 - [ ] Ask cursor if it can spot any bugs or areas of improvement
 - [x] Refactor permissions into its own hook probably
