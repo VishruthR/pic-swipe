@@ -1,11 +1,10 @@
 import { useMediaLibraryPermissions } from '@/hooks/use-media-library-permissions';
 import { TrashStorage } from '@/utils/trash-storage';
-import { Image } from 'expo-image';
 import * as MediaLibrary from 'expo-media-library';
-import React, { useCallback, useState } from 'react';
-import { Dimensions, StyleSheet, TouchableOpacity, View } from 'react-native';
-import { Gesture, GestureDetector } from 'react-native-gesture-handler';
-import Animated, {
+import React, { useCallback, useRef, useState } from 'react';
+import { Dimensions, StyleSheet, TouchableOpacity } from 'react-native';
+import { Gesture } from 'react-native-gesture-handler';
+import {
   useAnimatedStyle,
   useSharedValue,
   withSpring,
@@ -15,7 +14,7 @@ import { scheduleOnRN } from 'react-native-worklets';
 import { ThemedText } from './themed-text';
 import { ThemedView } from './themed-view';
 
-const { width: screenWidth } = Dimensions.get('window');
+const { width: screenWidth, height: screenHeight } = Dimensions.get('window');
 const SWIPE_THRESHOLD = screenWidth * 0.3;
 
 const formatTime = (timestamp: number): string => {
@@ -29,23 +28,32 @@ const formatTime = (timestamp: number): string => {
   });
 };
 
+interface PhotoData {
+  asset: MediaLibrary.Asset;
+  info: MediaLibrary.AssetInfo | null;
+}
+
 export default function RandomPhotoPicker() {
-  const [currentPhoto, setCurrentPhoto] = useState<MediaLibrary.Asset | null>(null);
-  const [currentPhotoInfo, setCurrentPhotoInfo] = useState<MediaLibrary.AssetInfo | null>(null);
+  // Photo queue system - current and next photo ready
+  const [currentPhoto, setCurrentPhoto] = useState<PhotoData | null>(null);
+  const [nextPhoto, setNextPhoto] = useState<PhotoData | null>(null);
   const [loading, setLoading] = useState(false);
   const [totalPhotoCount, setTotalPhotoCount] = useState(0);
-  const [lastPhotoId, setLastPhotoId] = useState<string | null>(null);
   const [hasError, setHasError] = useState(false);
   const [initialized, setInitialized] = useState(false);
   
-  // Swipe gesture values
-  const translateX = useSharedValue(0);
-  const rotate = useSharedValue(0);
-  const opacity = useSharedValue(1);
+  const isLoadingNext = useRef(false);
   
-  // Photo slide-in values
-  const slideInTranslateY = useSharedValue(0);
-  const slideInOpacity = useSharedValue(1);
+  // Animation values for current photo
+  const currentTranslateX = useSharedValue(0);
+  const currentRotate = useSharedValue(0);
+  const currentOpacity = useSharedValue(1);
+  
+  // Animation values for next photo 
+  const nextTranslateY = useSharedValue(-screenHeight);
+  const nextOpacity = useSharedValue(0);
+  
+  const showNext = useSharedValue(0); // 0 = current, 1 = next
 
   const getRandomPhoto = useCallback(async (excludeIds: string[] = []): Promise<MediaLibrary.Asset | null> => {
     // Try 10 times to get a random photo
@@ -76,42 +84,93 @@ export default function RandomPhotoPicker() {
     return null;
   }, [totalPhotoCount]);
 
-  const animatePhotoIn = () => {
-    translateX.value = 0;
-    rotate.value = 0;
-    opacity.value = 1;
+  const loadPhotoData = useCallback(async (excludeIds: string[] = []): Promise<PhotoData | null> => {
+    const asset = await getRandomPhoto(excludeIds);
+    if (!asset) return null;
 
-    slideInTranslateY.value = -screenWidth;
-    slideInOpacity.value = 0;
+    // Load photo info in parallel with asset
+    let info: MediaLibrary.AssetInfo | null = null;
+    try {
+      info = await MediaLibrary.getAssetInfoAsync(asset.id);
+    } catch (error) {
+      console.error('Error loading photo info:', error);
+    }
+
+    return { asset, info };
+  }, [getRandomPhoto]);
+
+  // Preload the next photo in background
+  const preloadNextPhoto = useCallback(async () => {
+    if (isLoadingNext.current || totalPhotoCount === 0) return;
     
-    slideInTranslateY.value = withTiming(0, {duration: 400});
-    slideInOpacity.value = withTiming(1, {duration: 400});
-  }
+    isLoadingNext.current = true;
+    try {
+      console.log('[preloadNextPhoto] start', { excludeId: currentPhoto?.asset.id });
+      const photoData = await loadPhotoData([currentPhoto?.asset.id ?? '']);
+      
+      if (photoData) {
+        console.log('[preloadNextPhoto] loaded next photo', { id: photoData.asset.id });
+        setNextPhoto(photoData);
+        // Reset next photo animation values
+        nextTranslateY.value = -screenHeight;
+        nextOpacity.value = 0;
+      }
+    } catch (error) {
+      console.error('Error preloading next photo:', error);
+    } finally {
+      console.log('[preloadNextPhoto] end');
+      isLoadingNext.current = false;
+    }
+  }, [totalPhotoCount, loadPhotoData, nextTranslateY, nextOpacity]);
 
-  const loadRandomPhoto = useCallback(async (numPhotos: number | null = null) => {
-    // We use numPhotos as an argument in case state updates haven't gone through
+  // Animate transition to next photo
+  const transitionToNext = useCallback(() => {
+    if (!nextPhoto) return;
+
+    console.log('[transitionToNext] animating in next photo', { id: nextPhoto.asset.id });
+    nextTranslateY.value = withTiming(0, { duration: 400 });
+    nextOpacity.value = withTiming(1, { duration: 400 });
+    showNext.value = withTiming(1, { duration: 400 }, (finished) => {
+      if (finished) {
+        // Move state updates back to JS
+        scheduleOnRN(() => {
+          console.log('[transitionToNext] completed, swapping to next photo');
+          setCurrentPhoto(nextPhoto);
+          setNextPhoto(null);
+
+          currentTranslateX.value = 0;
+          currentRotate.value = 0;
+          currentOpacity.value = 1;
+
+          showNext.value = 0;
+
+          preloadNextPhoto();
+        });
+      }
+    });
+  }, [nextPhoto, nextTranslateY, nextOpacity, showNext, currentTranslateX, currentRotate, currentOpacity, preloadNextPhoto]);
+
+  const loadInitialPhotos = useCallback(async (numPhotos: number | null = null) => {
     if (numPhotos === 0 || (numPhotos === null && totalPhotoCount === 0)) return;
 
-    const photo = await getRandomPhoto([lastPhotoId || '']);
-    if (photo) {
-      setCurrentPhoto(photo);
-      setLastPhotoId(photo.id);
-      
-      // Fetch detailed info for the current photo
-      try {
-        const photoInfo = await MediaLibrary.getAssetInfoAsync(photo.id);
-        setCurrentPhotoInfo(photoInfo);
-      } catch (error) {
-        console.error('Error loading photo info:', error);
-        setCurrentPhotoInfo(null);
+    try {
+      // Load first photo
+      console.log('[loadInitialPhotos] start');
+      const firstPhoto = await loadPhotoData();
+      if (firstPhoto) {
+        console.log('[loadInitialPhotos] first photo loaded', { id: firstPhoto.asset.id });
+        setCurrentPhoto(firstPhoto);
+        // Start preloading next photo immediately
+        preloadNextPhoto();
       }
-
-      animatePhotoIn();
+    } catch (error) {
+      console.error('Error loading initial photos:', error);
     }
-  }, [lastPhotoId, getRandomPhoto]);
+  }, [totalPhotoCount, loadPhotoData, preloadNextPhoto]);
 
   const initializePhotos = useCallback(async () => {
     try {
+      console.log('[initializePhotos] start');
       setLoading(true);
       setHasError(false);
       
@@ -121,79 +180,117 @@ export default function RandomPhotoPicker() {
       });
       
       if (totalAssets.totalCount > 0) {
+        console.log('[initializePhotos] totalCount', totalAssets.totalCount);
         setTotalPhotoCount(totalAssets.totalCount);
-        await loadRandomPhoto(totalAssets.totalCount);
+        await loadInitialPhotos(totalAssets.totalCount);
       } else {
         setHasError(true);
       }
     } catch (error) {
       setHasError(true);
     } finally {
+      console.log('[initializePhotos] end');
       setLoading(false);
       setInitialized(true);
     }
-  }, [loadRandomPhoto]);
+  }, [loadInitialPhotos]);
 
   const { permissionStatus, requestPermissions } = useMediaLibraryPermissions({
     onGranted: initializePhotos,
   });
   
-  const loadNewPhoto = useCallback(async () => {
-    await loadRandomPhoto();
-  }, [loadRandomPhoto]);
-
-  const handleSkip = useCallback(() => loadNewPhoto(), [loadNewPhoto]);
+  const handleSkip = useCallback(() => {
+    console.log('[handleSkip] invoked');
+    if (nextPhoto) {
+      transitionToNext();
+    } else {
+      // Fallback: preload next photo if not ready
+      preloadNextPhoto();
+    }
+  }, [nextPhoto, transitionToNext, preloadNextPhoto]);
 
   const handleDelete = useCallback(async () => {
     if (!currentPhoto) return;
     
-    await TrashStorage.addToTrash(currentPhoto.id);
+    console.log('[handleDelete] adding to trash', { id: currentPhoto.asset.id });
+    await TrashStorage.addToTrash(currentPhoto.asset.id);
     
     const trashCount = await TrashStorage.getTrashCount();
+    console.log('[handleDelete] trash count', trashCount);
     if (totalPhotoCount - trashCount <= 1) {
+      console.log('[handleDelete] near exhaustion, reinitializing');
       initializePhotos();
     } else {
-      loadNewPhoto();
+      if (nextPhoto) {
+        transitionToNext();
+      } else {
+        preloadNextPhoto();
+      }
     }
-  }, [currentPhoto, totalPhotoCount, initializePhotos, loadNewPhoto]);
+  }, [currentPhoto, totalPhotoCount, initializePhotos, nextPhoto, transitionToNext, preloadNextPhoto]);
 
   const animateOut = (direction: 'left' | 'right') => {
+    'worklet';
+    console.log('[animateOut] start', direction);
     const targetX = direction === 'left' ? -screenWidth * 1.5 : screenWidth * 1.5;
     
-    translateX.value = withSpring(targetX, { damping: 15, stiffness: 100 });
-    rotate.value = withSpring(direction === 'left' ? -30 : 30);
-    opacity.value = withSpring(0);
-    const action = direction === 'right' ? handleSkip : handleDelete;
-    action();
+    currentTranslateX.value = withSpring(targetX, { damping: 15, stiffness: 100 });
+    currentRotate.value = withSpring(direction === 'left' ? -30 : 30);
+    currentOpacity.value = withSpring(0, {}, (finished) => {
+      if (finished) {
+        // Call back into JS to perform side effects
+        scheduleOnRN(() => {
+          console.log('[animateOut] finished, invoking action', direction);
+          const action = direction === 'right' ? handleSkip : handleDelete;
+          action();
+        });
+      }
+    });
   };
 
   const panGesture = Gesture.Pan()
     .onUpdate((event) => {
-      translateX.value = event.translationX;
-      rotate.value = event.translationX / 10;
-      opacity.value = 1 - Math.abs(event.translationX) / (screenWidth * 0.8);
+      // gesture update logs kept light to avoid spam; uncomment if needed
+      // console.log('[panGesture] update', event.translationX);
+      currentTranslateX.value = event.translationX;
+      currentRotate.value = event.translationX / 10;
+      currentOpacity.value = 1 - Math.abs(event.translationX) / (screenWidth * 0.8);
     })
     .onEnd((event) => {
+      console.log('[panGesture] end', event.translationX);
       const shouldSwipe = Math.abs(event.translationX) > SWIPE_THRESHOLD;
       
       if (shouldSwipe) {
         const direction = event.translationX > 0 ? 'right' : 'left';
-        scheduleOnRN(animateOut, direction);
+        // We are on UI thread; call worklet directly
+        animateOut(direction);
       } else {
-        translateX.value = withSpring(0);
-        rotate.value = withSpring(0);
-        opacity.value = withSpring(1);
+        currentTranslateX.value = withSpring(0);
+        currentRotate.value = withSpring(0);
+        currentOpacity.value = withSpring(1);
       }
     });
 
-  const animatedStyle = useAnimatedStyle(() => {
+  // Animated styles for current photo
+  const currentPhotoStyle = useAnimatedStyle(() => {
     return {
       transform: [
-        { translateX: translateX.value },
-        { translateY: slideInTranslateY.value },
-        { rotate: `${rotate.value}deg` },
+        { translateX: currentTranslateX.value },
+        { rotate: `${currentRotate.value}deg` },
       ],
-      opacity: opacity.value * slideInOpacity.value,
+      opacity: currentOpacity.value,
+      zIndex: showNext.value === 0 ? 2 : 1,
+    };
+  });
+
+  // Animated styles for next photo (slides in from top)
+  const nextPhotoStyle = useAnimatedStyle(() => {
+    return {
+      transform: [
+        { translateY: nextTranslateY.value },
+      ],
+      opacity: nextOpacity.value,
+      zIndex: showNext.value === 1 ? 2 : 1,
     };
   });
 
@@ -210,58 +307,6 @@ export default function RandomPhotoPicker() {
     );
   }
 
-  if (loading || !initialized) {
-    return (
-      <ThemedView style={styles.container}>
-        <ThemedText style={styles.centerText}>Loading photos...</ThemedText>
-      </ThemedView>
-    );
-  }
-
-
-  if (hasError || !currentPhoto) {
-    return (
-      <ThemedView style={styles.container}>
-        <ThemedText style={styles.centerText}>
-          {hasError ? 'No photos found' : 'No photo selected'}
-        </ThemedText>
-        <TouchableOpacity style={[styles.button, styles.retryButton]} onPress={initializePhotos}>
-          <ThemedText style={styles.buttonText}>Load Photos</ThemedText>
-        </TouchableOpacity>
-      </ThemedView>
-    );
-  }
-
-  return (
-    <ThemedView style={styles.container}>
-      <View style={styles.photoStackContainer}>
-        <GestureDetector gesture={panGesture}>
-          <Animated.View style={[styles.photoContainer, animatedStyle]}>
-            {currentPhoto && (
-              <Image source={{ uri: currentPhoto.uri }} style={styles.photo} contentFit="contain" />
-            )}
-          </Animated.View>
-        </GestureDetector>
-      </View>
-      
-      {currentPhotoInfo && (
-        <ThemedText style={styles.photoTimeText}>
-          {formatTime(currentPhotoInfo.creationTime)}
-        </ThemedText>
-      )}
-      
-      <View style={styles.instructionsContainer}>
-        <View style={styles.instructionRow}>
-          <View style={[styles.instructionDot, styles.deleteDot]} />
-          <ThemedText style={styles.instructionText}>Swipe left to delete</ThemedText>
-        </View>
-        <View style={styles.instructionRow}>
-          <View style={[styles.instructionDot, styles.keepDot]} />
-          <ThemedText style={styles.instructionText}>Swipe right to keep</ThemedText>
-        </View>
-      </View>
-    </ThemedView>
-  );
 }
 
 const styles = StyleSheet.create({
@@ -287,7 +332,6 @@ const styles = StyleSheet.create({
     backgroundColor: '#34C759',
   },
   buttonText: {
-    color: 'white',
     fontWeight: '600',
     fontSize: 16,
   },
@@ -302,10 +346,16 @@ const styles = StyleSheet.create({
     height: screenWidth - 40,
   },
   photoContainer: {
+    position: 'absolute',
     alignItems: 'center',
     justifyContent: 'center',
     width: '100%',
     height: '100%',
+  },
+  nextPhotoContainer: {
+    // Next photo starts positioned above the screen
+    top: 0,
+    left: 0,
   },
   instructionsContainer: {
     alignItems: 'center',
