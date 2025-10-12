@@ -1,6 +1,6 @@
 # Pic Swipe
 
-[link to substack I write eventually](tbd)
+[Substack article](https://pokelord.substack.com/p/pic-swipe)
 
 I wanted to gamify the process of deleting old photos from my camera roll. There's a lot of apps out there which already do this, but they have annoying freemium models or excessive features that I didn't want. So, I vibe coded a quick version for my personal use. Feel free to use this app however you want, just keep in mind that it is probably buggy.
 
