@@ -12,7 +12,7 @@ I purposely added lots of alerts before emptying the trash to ensure users (me) 
 
 ### Disclaimers
 
-This app was designed and tested on my phone (Apple iPhone 16 IOS 18.6.2). It is designed only for photos from your phones camera roll. I run it on expo go because I didn't want to pay Apple's insane $99/year developer fee. 
+This app has only been tested on my phone (Apple iPhone IOS 18.6.2), so it is likely that it does not work on other phones. It is designed only for photos from your phones camera roll. I run it on expo go because I didn't want to pay Apple's insane $99/year developer fee. 
 
 I wrote this app primarily using Cursor with `claude-sonnet-4`. The code is functional, it is not great.
 
@@ -22,4 +22,18 @@ I'm not responsible for any data loss or other negative consequences of using th
 
 ## How to Use
 
-Section TBD until I figure out the best way to deploy this app
+#### Live
+
+I deployed a preview of the app using expo app services. If you already have the [Expo Go](https://expo.dev/go) app, you can scan the QR code below with your phone. Since this is an app preview, it may go offline. However, I will do my best to keep it updated.
+
+![App preview QR code](AppPreviewQRCode.png)
+
+#### Local
+
+1. Download the [Expo Go](https://expo.dev/go) app on your phone
+
+2. Clone this repository
+
+3. Run `npm run start` in the repo's root
+
+4. Scan the QR code from the above commands output using your phone
