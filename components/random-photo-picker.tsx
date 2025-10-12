@@ -99,55 +99,70 @@ export default function RandomPhotoPicker() {
   }, [getRandomPhoto]);
 
   useEffect(() => {
-    nextTranslateY.value = -screenHeight;
-    nextOpacity.value = 0;
+    if (nextPhoto) {
+      nextTranslateY.value = -screenHeight;
+      nextOpacity.value = 0;
+    }
   }, [nextPhoto])
 
-  const preloadNextPhoto = useCallback(async (numPhotos: number | null = null) => {
+  const preloadNextPhoto = useCallback(async (numPhotos: number | null = null, currentPhotoId: string | null = null): Promise<PhotoData | null> => {
     const numPhotosInLibrary = numPhotos === null ? totalPhotoCount : numPhotos;
-    if (isLoadingNext.current || numPhotosInLibrary === 0) return;
+    if (isLoadingNext.current || numPhotosInLibrary === 0) return null;
+
+    const currPhotoId = currentPhotoId ?? currentPhoto?.asset.id;
+    
+    if (nextPhoto && nextPhoto.asset.id !== currPhotoId) {
+      return nextPhoto;
+    }
     
     isLoadingNext.current = true;
     try {
-      const photoData = await loadPhotoData([currentPhoto?.asset.id ?? '']);
-
-      if(currentPhoto?.asset.id === photoData?.asset.id) {
-        console.log('preloaded next photo is the same as the current photo');
-        console.log('currentPhoto', currentPhoto?.asset.id);
-        console.log('photoData', photoData?.asset.id);
+      let photoData: PhotoData | null = null;
+      for(let i = 0; i < 10; i++) {
+        photoData = await loadPhotoData([currPhotoId ?? '']);
+        if(photoData && (!currPhotoId || photoData.asset.id !== currPhotoId)) {
+          break;
+        }
       }
 
       if (photoData) {
         setNextPhoto(photoData);
+        return photoData;
       }
+      return null;
     } catch (error) {
       console.error('Error preloading next photo:', error);
+      return null;
     } finally {
       isLoadingNext.current = false;
     }
-  }, [totalPhotoCount, loadPhotoData, nextTranslateY, nextOpacity]);
+  }, [totalPhotoCount, loadPhotoData, currentPhoto, nextPhoto]);
 
   useEffect(() => {
-    // Reset current photo animation values whenever current photo changes
     // 100ms timeout to avoid flicker of old photo
-    setTimeout(() => {
+    const timeoutId = setTimeout(() => {
       currentTranslateX.value = 0;
       currentRotate.value = 0;
       currentOpacity.value = 1;
 
       showNext.value = 0;
-      preloadNextPhoto();
-    }, 100)
-  }, [currentPhoto])
+      
+      // Only preload if we have photos to load from
+      if (totalPhotoCount > 0) {
+        preloadNextPhoto();
+      }
+    }, 100);
+    
+    return () => {
+      clearTimeout(timeoutId);
+    };
+  }, [currentPhoto, totalPhotoCount, preloadNextPhoto, currentTranslateX, currentRotate, currentOpacity, showNext])
 
   const transitionToNext = useCallback(() => {
     if (!nextPhoto) return;
 
     const transitionNextToCurrent = () => {
-      if (!nextPhoto) {
-        console.warn('[transitionToNext] nextPhoto missing at completion');
-        return;
-      }
+      if (!nextPhoto) return;
     
       setCurrentPhoto(nextPhoto);
     }
@@ -168,7 +183,7 @@ export default function RandomPhotoPicker() {
       const firstPhoto = await loadPhotoData();
       if (firstPhoto) {
         setCurrentPhoto(firstPhoto);
-        preloadNextPhoto(numPhotos);
+        preloadNextPhoto(numPhotos, firstPhoto.asset.id);
       }
     } catch (error) {
       console.error('Error loading initial photos:', error);
@@ -204,12 +219,15 @@ export default function RandomPhotoPicker() {
   });
   
   const handleSkip = useCallback(async () => {
-    if (!nextPhoto) {
-      await preloadNextPhoto();
+    let photoToTransitionTo = nextPhoto;
+    if (!nextPhoto || nextPhoto.asset.id === currentPhoto?.asset.id) {
+      photoToTransitionTo = await preloadNextPhoto();
     }
 
-    transitionToNext();
-  }, [nextPhoto, transitionToNext, preloadNextPhoto]);
+    if (photoToTransitionTo && photoToTransitionTo.asset.id !== currentPhoto?.asset.id) {
+      transitionToNext();
+    }
+  }, [nextPhoto, currentPhoto, transitionToNext, preloadNextPhoto]);
 
   const handleDelete = useCallback(async () => {
     if (!currentPhoto) return;
@@ -218,11 +236,14 @@ export default function RandomPhotoPicker() {
     
     const trashCount = await TrashStorage.getTrashCount();
     
-    if (!nextPhoto) {
-      await preloadNextPhoto();
+    let photoToTransitionTo = nextPhoto;
+    if (!nextPhoto || nextPhoto.asset.id === currentPhoto.asset.id) {
+      photoToTransitionTo = await preloadNextPhoto();
     }
 
-    transitionToNext();
+    if (photoToTransitionTo && photoToTransitionTo.asset.id !== currentPhoto.asset.id) {
+      transitionToNext();
+    }
   }, [currentPhoto, nextPhoto, transitionToNext, preloadNextPhoto]);
 
   const switchPhotosAfterAnimation = useCallback((direction: 'left' | 'right') => {
