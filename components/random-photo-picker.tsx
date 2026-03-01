@@ -1,5 +1,6 @@
 import { useMediaLibraryPermissions } from '@/hooks/use-media-library-permissions';
 import { TrashStorage } from '@/utils/trash-storage';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Image } from 'expo-image';
 import * as MediaLibrary from 'expo-media-library';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
@@ -17,12 +18,13 @@ import { ThemedView } from './themed-view';
 
 const { width: screenWidth, height: screenHeight } = Dimensions.get('window');
 const SWIPE_THRESHOLD = screenWidth * 0.3;
+const PHOTO_INDEX_KEY = '@photo_index';
 
 const formatTime = (timestamp: number): string => {
   const date = new Date(timestamp);
-  return date.toLocaleDateString('en-US', { 
-    year: 'numeric', 
-    month: 'short', 
+  return date.toLocaleDateString('en-US', {
+    year: 'numeric',
+    month: 'short',
     day: 'numeric',
     hour: '2-digit',
     minute: '2-digit'
@@ -38,54 +40,61 @@ export default function RandomPhotoPicker() {
   const [currentPhoto, setCurrentPhoto] = useState<PhotoData | null>(null);
   const [nextPhoto, setNextPhoto] = useState<PhotoData | null>(null);
   const [loading, setLoading] = useState(false);
-  const [totalPhotoCount, setTotalPhotoCount] = useState(0);
   const [hasError, setHasError] = useState(false);
   const [initialized, setInitialized] = useState(false);
-  
+
   const isLoadingNext = useRef(false);
-  
+  const currentIndexRef = useRef(0);
+
   // Animation values for current photo
   const currentTranslateX = useSharedValue(0);
   const currentRotate = useSharedValue(0);
   const currentOpacity = useSharedValue(1);
-  
-  // Animation values for next photo 
+
+  // Animation values for next photo
   const nextTranslateY = useSharedValue(-screenHeight);
   const nextOpacity = useSharedValue(0);
-  
+
   const showNext = useSharedValue(0); // 0 = current, 1 = next
 
-  const getRandomPhoto = useCallback(async (excludeIds: string[] = []): Promise<MediaLibrary.Asset | null> => {
-    // Try 10 times to get a random photo
-    for (let attempt = 0; attempt < 10; attempt++) {
-      const randomIndex = Math.floor(Math.random() * totalPhotoCount);
-      
-      try {
-        const assets = await MediaLibrary.getAssetsAsync({
+  // Fetch the photo at a specific 0-based position (oldest first)
+  const getPhotoAtIndex = useCallback(async (index: number): Promise<MediaLibrary.Asset | null> => {
+    try {
+      if (index === 0) {
+        const result = await MediaLibrary.getAssetsAsync({
           mediaType: 'photo',
           first: 1,
-          after: randomIndex > 0 ? (await MediaLibrary.getAssetsAsync({
-            mediaType: 'photo',
-            first: randomIndex,
-          })).endCursor : undefined,
+          sortBy: ['creationTime', true],
         });
-        
-        const photo = assets.assets[0];
-        if (!photo) continue;
-        
-        const isTrash = await TrashStorage.isInTrash(photo.id);
-        if (!isTrash && !excludeIds.includes(photo.id)) {
-          return photo;
-        }
-      } catch (error) {
-        continue;
+        return result.assets[0] || null;
       }
-    }
-    return null;
-  }, [totalPhotoCount]);
 
-  const loadPhotoData = useCallback(async (excludeIds: string[] = []): Promise<PhotoData | null> => {
-    const asset = await getRandomPhoto(excludeIds);
+      // Two-call approach: fetch N items to get cursor at position index-1,
+      // then fetch the single photo right after that cursor
+      const cursorResult = await MediaLibrary.getAssetsAsync({
+        mediaType: 'photo',
+        first: index,
+        sortBy: [[MediaLibrary.SortBy.creationTime, true]],
+      });
+
+      if (!cursorResult.hasNextPage) return null;
+
+      const photoResult = await MediaLibrary.getAssetsAsync({
+        mediaType: 'photo',
+        first: 1,
+        after: cursorResult.endCursor,
+        sortBy: [[MediaLibrary.SortBy.creationTime, true]],
+      });
+
+      return photoResult.assets[0] || null;
+    } catch (error) {
+      console.error('Error getting photo at index:', error);
+      return null;
+    }
+  }, []);
+
+  const loadPhotoData = useCallback(async (index: number): Promise<PhotoData | null> => {
+    const asset = await getPhotoAtIndex(index);
     if (!asset) return null;
 
     let info: MediaLibrary.AssetInfo | null = null;
@@ -96,7 +105,7 @@ export default function RandomPhotoPicker() {
     }
 
     return { asset, info };
-  }, [getRandomPhoto]);
+  }, [getPhotoAtIndex]);
 
   useEffect(() => {
     if (nextPhoto) {
@@ -105,26 +114,12 @@ export default function RandomPhotoPicker() {
     }
   }, [nextPhoto])
 
-  const preloadNextPhoto = useCallback(async (numPhotos: number | null = null, currentPhotoId: string | null = null): Promise<PhotoData | null> => {
-    const numPhotosInLibrary = numPhotos === null ? totalPhotoCount : numPhotos;
-    if (isLoadingNext.current || numPhotosInLibrary === 0) return null;
+  const preloadNextPhoto = useCallback(async (nextIndex: number): Promise<PhotoData | null> => {
+    if (isLoadingNext.current) return null;
 
-    const currPhotoId = currentPhotoId ?? currentPhoto?.asset.id;
-    
-    if (nextPhoto && nextPhoto.asset.id !== currPhotoId) {
-      return nextPhoto;
-    }
-    
     isLoadingNext.current = true;
     try {
-      let photoData: PhotoData | null = null;
-      for(let i = 0; i < 10; i++) {
-        photoData = await loadPhotoData([currPhotoId ?? '']);
-        if(photoData && (!currPhotoId || photoData.asset.id !== currPhotoId)) {
-          break;
-        }
-      }
-
+      const photoData = await loadPhotoData(nextIndex);
       if (photoData) {
         setNextPhoto(photoData);
         return photoData;
@@ -136,7 +131,7 @@ export default function RandomPhotoPicker() {
     } finally {
       isLoadingNext.current = false;
     }
-  }, [totalPhotoCount, loadPhotoData, currentPhoto, nextPhoto]);
+  }, [loadPhotoData]);
 
   useEffect(() => {
     // 100ms timeout to avoid flicker of old photo
@@ -146,24 +141,21 @@ export default function RandomPhotoPicker() {
       currentOpacity.value = 1;
 
       showNext.value = 0;
-      
-      // Only preload if we have photos to load from
-      if (totalPhotoCount > 0) {
-        preloadNextPhoto();
-      }
+
+      preloadNextPhoto(currentIndexRef.current + 1);
     }, 100);
-    
+
     return () => {
       clearTimeout(timeoutId);
     };
-  }, [currentPhoto, totalPhotoCount, preloadNextPhoto, currentTranslateX, currentRotate, currentOpacity, showNext])
+  }, [currentPhoto, preloadNextPhoto, currentTranslateX, currentRotate, currentOpacity, showNext])
 
-  const transitionToNext = useCallback(() => {
+  const transitionToNext = useCallback((onCommit?: () => void) => {
     if (!nextPhoto) return;
 
     const transitionNextToCurrent = () => {
       if (!nextPhoto) return;
-    
+      onCommit?.();
       setCurrentPhoto(nextPhoto);
     }
 
@@ -174,34 +166,43 @@ export default function RandomPhotoPicker() {
         scheduleOnRN(transitionNextToCurrent);
       }
     });
-  }, [nextPhoto, nextTranslateY, nextOpacity, showNext, currentTranslateX, currentRotate, currentOpacity, preloadNextPhoto]);
+  }, [nextPhoto, nextTranslateY, nextOpacity, showNext]);
 
-  const loadInitialPhotos = useCallback(async (numPhotos: number | null = null) => {
-    if (numPhotos === 0 || (numPhotos === null && totalPhotoCount === 0)) return;
+  const saveIndex = useCallback((index: number) => {
+    AsyncStorage.setItem(PHOTO_INDEX_KEY, index.toString())
+      .catch(err => console.error('Failed to save photo index:', err));
+  }, []);
+
+  const loadInitialPhotos = useCallback(async (totalCount: number) => {
+    if (totalCount === 0) return;
 
     try {
-      const firstPhoto = await loadPhotoData();
+      const stored = await AsyncStorage.getItem(PHOTO_INDEX_KEY);
+      const savedIndex = stored ? parseInt(stored, 10) : 0;
+      const startIndex = Math.min(Math.max(savedIndex, 0), totalCount - 1);
+      currentIndexRef.current = startIndex;
+
+      const firstPhoto = await loadPhotoData(startIndex);
       if (firstPhoto) {
         setCurrentPhoto(firstPhoto);
-        preloadNextPhoto(numPhotos, firstPhoto.asset.id);
+        preloadNextPhoto(startIndex + 1);
       }
     } catch (error) {
       console.error('Error loading initial photos:', error);
     }
-  }, [totalPhotoCount, loadPhotoData, preloadNextPhoto]);
+  }, [loadPhotoData, preloadNextPhoto]);
 
   const initializePhotos = useCallback(async () => {
     try {
       setLoading(true);
       setHasError(false);
-      
+
       const totalAssets = await MediaLibrary.getAssetsAsync({
         mediaType: 'photo',
         first: 1,
       });
-      
+
       if (totalAssets.totalCount > 0) {
-        setTotalPhotoCount(totalAssets.totalCount);
         await loadInitialPhotos(totalAssets.totalCount);
       } else {
         setHasError(true);
@@ -217,34 +218,37 @@ export default function RandomPhotoPicker() {
   const { permissionStatus, requestPermissions } = useMediaLibraryPermissions({
     onGranted: initializePhotos,
   });
-  
+
+  const commitTransition = useCallback(() => {
+    currentIndexRef.current++;
+    saveIndex(currentIndexRef.current);
+  }, [saveIndex]);
+
   const handleSkip = useCallback(async () => {
     let photoToTransitionTo = nextPhoto;
-    if (!nextPhoto || nextPhoto.asset.id === currentPhoto?.asset.id) {
-      photoToTransitionTo = await preloadNextPhoto();
+    if (!nextPhoto) {
+      photoToTransitionTo = await preloadNextPhoto(currentIndexRef.current + 1);
     }
 
-    if (photoToTransitionTo && photoToTransitionTo.asset.id !== currentPhoto?.asset.id) {
-      transitionToNext();
+    if (photoToTransitionTo) {
+      transitionToNext(commitTransition);
     }
-  }, [nextPhoto, currentPhoto, transitionToNext, preloadNextPhoto]);
+  }, [nextPhoto, transitionToNext, preloadNextPhoto, commitTransition]);
 
   const handleDelete = useCallback(async () => {
     if (!currentPhoto) return;
-    
+
     await TrashStorage.addToTrash(currentPhoto.asset.id);
-    
-    const trashCount = await TrashStorage.getTrashCount();
-    
+
     let photoToTransitionTo = nextPhoto;
-    if (!nextPhoto || nextPhoto.asset.id === currentPhoto.asset.id) {
-      photoToTransitionTo = await preloadNextPhoto();
+    if (!nextPhoto) {
+      photoToTransitionTo = await preloadNextPhoto(currentIndexRef.current + 1);
     }
 
-    if (photoToTransitionTo && photoToTransitionTo.asset.id !== currentPhoto.asset.id) {
-      transitionToNext();
+    if (photoToTransitionTo) {
+      transitionToNext(commitTransition);
     }
-  }, [currentPhoto, nextPhoto, transitionToNext, preloadNextPhoto]);
+  }, [currentPhoto, nextPhoto, transitionToNext, preloadNextPhoto, commitTransition]);
 
   const switchPhotosAfterAnimation = useCallback((direction: 'left' | 'right') => {
     const action = direction === 'right' ? handleSkip : handleDelete;
@@ -253,7 +257,7 @@ export default function RandomPhotoPicker() {
 
   const animateOut = (direction: 'left' | 'right') => {
     const targetX = direction === 'left' ? -screenWidth * 1.5 : screenWidth * 1.5;
-    
+
     currentTranslateX.value = withTiming(targetX, { duration: 400 });
     currentRotate.value = withTiming(direction === 'left' ? -30 : 30, { duration: 400 });
     currentOpacity.value = withTiming(0, { duration: 200 }, (finished) => {
@@ -271,7 +275,7 @@ export default function RandomPhotoPicker() {
     })
     .onEnd((event) => {
       const shouldSwipe = Math.abs(event.translationX) > SWIPE_THRESHOLD;
-      
+
       if (shouldSwipe) {
         const direction = event.translationX > 0 ? 'right' : 'left';
         scheduleOnRN(animateOut, direction);
@@ -345,35 +349,35 @@ export default function RandomPhotoPicker() {
         {currentPhoto && (
           <GestureDetector gesture={panGesture}>
             <Animated.View style={[styles.photoContainer, currentPhotoStyle]}>
-              <Image 
-                source={{ uri: currentPhoto.asset.uri }} 
-                style={styles.photo} 
+              <Image
+                source={{ uri: currentPhoto.asset.uri }}
+                style={styles.photo}
                 contentFit="contain"
                 priority="high"
               />
             </Animated.View>
           </GestureDetector>
         )}
-        
+
         {/* Next Photo (preloaded, slides in from top) */}
         {nextPhoto && (
           <Animated.View style={[styles.photoContainer, styles.nextPhotoContainer, nextPhotoStyle]}>
-            <Image 
-              source={{ uri: nextPhoto.asset.uri }} 
-              style={styles.photo} 
+            <Image
+              source={{ uri: nextPhoto.asset.uri }}
+              style={styles.photo}
               contentFit="contain"
               priority="normal"
             />
           </Animated.View>
         )}
       </View>
-      
+
       {currentPhoto?.info && (
         <ThemedText style={styles.photoTimeText}>
           {formatTime(currentPhoto.info.creationTime)}
         </ThemedText>
       )}
-      
+
       <View style={styles.instructionsContainer}>
         <View style={styles.instructionRow}>
           <View style={[styles.instructionDot, styles.deleteDot]} />
