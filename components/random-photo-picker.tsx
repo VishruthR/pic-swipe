@@ -100,7 +100,6 @@ export default function RandomPhotoPicker() {
         const idx = fromIndex + existing.length + newPhotos.length + 1;
         const photo = await loadPhotoData(idx);
         if (!photo) break;
-        // Prefetch into expo-image cache
         Image.prefetch(photo.asset.uri);
         newPhotos.push(photo);
       }
@@ -166,12 +165,16 @@ export default function RandomPhotoPicker() {
     onGranted: initializePhotos,
   });
 
-  // Whenever nextPhotos changes, top up the queue if needed
+  // Whenever nextPhotos changes, top up the queue if needed.
+  // Guard on `initialized` so this never fires before loadInitialPhotos sets
+  // currentIndexRef to the correct saved index – otherwise it would call
+  // fillPreloadQueue(0, []) on mount and load the oldest photos instead.
   useEffect(() => {
+    if (!initialized) return;
     if (nextPhotos.length < PRELOAD_AHEAD && !isLoadingNext.current) {
       fillPreloadQueue(currentIndexRef.current, nextPhotos);
     }
-  }, [nextPhotos, fillPreloadQueue]);
+  }, [nextPhotos, fillPreloadQueue, initialized]);
 
   const advance = useCallback(() => {
     if (nextPhotos.length === 0) return false;
