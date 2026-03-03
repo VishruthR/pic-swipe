@@ -5,20 +5,13 @@ import { Image } from 'expo-image';
 import * as MediaLibrary from 'expo-media-library';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Dimensions, StyleSheet, TouchableOpacity, View } from 'react-native';
-import { Gesture, GestureDetector } from 'react-native-gesture-handler';
-import Animated, {
-  useAnimatedStyle,
-  useSharedValue,
-  withSpring,
-  withTiming
-} from 'react-native-reanimated';
-import { scheduleOnRN } from 'react-native-worklets';
+import { IconSymbol } from './ui/icon-symbol';
 import { ThemedText } from './themed-text';
 import { ThemedView } from './themed-view';
 
-const { width: screenWidth, height: screenHeight } = Dimensions.get('window');
-const SWIPE_THRESHOLD = screenWidth * 0.3;
+const { width: screenWidth } = Dimensions.get('window');
 const PHOTO_INDEX_KEY = '@photo_index';
+const PRELOAD_AHEAD = 2;
 
 const formatTime = (timestamp: number): string => {
   const date = new Date(timestamp);
@@ -27,7 +20,7 @@ const formatTime = (timestamp: number): string => {
     month: 'short',
     day: 'numeric',
     hour: '2-digit',
-    minute: '2-digit'
+    minute: '2-digit',
   });
 };
 
@@ -38,7 +31,7 @@ interface PhotoData {
 
 export default function RandomPhotoPicker() {
   const [currentPhoto, setCurrentPhoto] = useState<PhotoData | null>(null);
-  const [nextPhoto, setNextPhoto] = useState<PhotoData | null>(null);
+  const [nextPhotos, setNextPhotos] = useState<PhotoData[]>([]);
   const [loading, setLoading] = useState(false);
   const [hasError, setHasError] = useState(false);
   const [initialized, setInitialized] = useState(false);
@@ -46,18 +39,6 @@ export default function RandomPhotoPicker() {
   const isLoadingNext = useRef(false);
   const currentIndexRef = useRef(0);
 
-  // Animation values for current photo
-  const currentTranslateX = useSharedValue(0);
-  const currentRotate = useSharedValue(0);
-  const currentOpacity = useSharedValue(1);
-
-  // Animation values for next photo
-  const nextTranslateY = useSharedValue(-screenHeight);
-  const nextOpacity = useSharedValue(0);
-
-  const showNext = useSharedValue(0); // 0 = current, 1 = next
-
-  // Fetch the photo at a specific 0-based position (oldest first)
   const getPhotoAtIndex = useCallback(async (index: number): Promise<MediaLibrary.Asset | null> => {
     try {
       if (index === 0) {
@@ -69,8 +50,6 @@ export default function RandomPhotoPicker() {
         return result.assets[0] || null;
       }
 
-      // Two-call approach: fetch N items to get cursor at position index-1,
-      // then fetch the single photo right after that cursor
       const cursorResult = await MediaLibrary.getAssetsAsync({
         mediaType: 'photo',
         first: index,
@@ -107,66 +86,34 @@ export default function RandomPhotoPicker() {
     return { asset, info };
   }, [getPhotoAtIndex]);
 
-  useEffect(() => {
-    if (nextPhoto) {
-      nextTranslateY.value = -screenHeight;
-      nextOpacity.value = 0;
-    }
-  }, [nextPhoto])
-
-  const preloadNextPhoto = useCallback(async (nextIndex: number): Promise<PhotoData | null> => {
-    if (isLoadingNext.current) return null;
-
+  // Fill the preload queue up to PRELOAD_AHEAD photos beyond currentIndex
+  const fillPreloadQueue = useCallback(async (fromIndex: number, existing: PhotoData[]) => {
+    if (isLoadingNext.current) return;
     isLoadingNext.current = true;
+
     try {
-      const photoData = await loadPhotoData(nextIndex);
-      if (photoData) {
-        setNextPhoto(photoData);
-        return photoData;
+      const needed = PRELOAD_AHEAD - existing.length;
+      if (needed <= 0) return;
+
+      const newPhotos: PhotoData[] = [];
+      for (let i = 0; i < needed; i++) {
+        const idx = fromIndex + existing.length + newPhotos.length + 1;
+        const photo = await loadPhotoData(idx);
+        if (!photo) break;
+        // Prefetch into expo-image cache
+        Image.prefetch(photo.asset.uri);
+        newPhotos.push(photo);
       }
-      return null;
+
+      if (newPhotos.length > 0) {
+        setNextPhotos(prev => [...prev, ...newPhotos]);
+      }
     } catch (error) {
-      console.error('Error preloading next photo:', error);
-      return null;
+      console.error('Error preloading photos:', error);
     } finally {
       isLoadingNext.current = false;
     }
   }, [loadPhotoData]);
-
-  useEffect(() => {
-    // 100ms timeout to avoid flicker of old photo
-    const timeoutId = setTimeout(() => {
-      currentTranslateX.value = 0;
-      currentRotate.value = 0;
-      currentOpacity.value = 1;
-
-      showNext.value = 0;
-
-      preloadNextPhoto(currentIndexRef.current + 1);
-    }, 100);
-
-    return () => {
-      clearTimeout(timeoutId);
-    };
-  }, [currentPhoto, preloadNextPhoto, currentTranslateX, currentRotate, currentOpacity, showNext])
-
-  const transitionToNext = useCallback((onCommit?: () => void) => {
-    if (!nextPhoto) return;
-
-    const transitionNextToCurrent = () => {
-      if (!nextPhoto) return;
-      onCommit?.();
-      setCurrentPhoto(nextPhoto);
-    }
-
-    nextTranslateY.value = withTiming(0, { duration: 200 });
-    nextOpacity.value = withTiming(1, { duration: 200 });
-    showNext.value = withTiming(1, { duration: 200 }, (finished) => {
-      if (finished) {
-        scheduleOnRN(transitionNextToCurrent);
-      }
-    });
-  }, [nextPhoto, nextTranslateY, nextOpacity, showNext]);
 
   const saveIndex = useCallback((index: number) => {
     AsyncStorage.setItem(PHOTO_INDEX_KEY, index.toString())
@@ -185,12 +132,12 @@ export default function RandomPhotoPicker() {
       const firstPhoto = await loadPhotoData(startIndex);
       if (firstPhoto) {
         setCurrentPhoto(firstPhoto);
-        preloadNextPhoto(startIndex + 1);
+        fillPreloadQueue(startIndex, []);
       }
     } catch (error) {
       console.error('Error loading initial photos:', error);
     }
-  }, [loadPhotoData, preloadNextPhoto]);
+  }, [loadPhotoData, fillPreloadQueue]);
 
   const initializePhotos = useCallback(async () => {
     try {
@@ -219,93 +166,33 @@ export default function RandomPhotoPicker() {
     onGranted: initializePhotos,
   });
 
-  const commitTransition = useCallback(() => {
+  // Whenever nextPhotos changes, top up the queue if needed
+  useEffect(() => {
+    if (nextPhotos.length < PRELOAD_AHEAD && !isLoadingNext.current) {
+      fillPreloadQueue(currentIndexRef.current, nextPhotos);
+    }
+  }, [nextPhotos, fillPreloadQueue]);
+
+  const advance = useCallback(() => {
+    if (nextPhotos.length === 0) return false;
+
+    const [next, ...rest] = nextPhotos;
     currentIndexRef.current++;
     saveIndex(currentIndexRef.current);
-  }, [saveIndex]);
+    setCurrentPhoto(next);
+    setNextPhotos(rest);
+    return true;
+  }, [nextPhotos, saveIndex]);
 
-  const handleSkip = useCallback(async () => {
-    let photoToTransitionTo = nextPhoto;
-    if (!nextPhoto) {
-      photoToTransitionTo = await preloadNextPhoto(currentIndexRef.current + 1);
-    }
-
-    if (photoToTransitionTo) {
-      transitionToNext(commitTransition);
-    }
-  }, [nextPhoto, transitionToNext, preloadNextPhoto, commitTransition]);
+  const handleKeep = useCallback(() => {
+    advance();
+  }, [advance]);
 
   const handleDelete = useCallback(async () => {
     if (!currentPhoto) return;
-
     await TrashStorage.addToTrash(currentPhoto.asset.id);
-
-    let photoToTransitionTo = nextPhoto;
-    if (!nextPhoto) {
-      photoToTransitionTo = await preloadNextPhoto(currentIndexRef.current + 1);
-    }
-
-    if (photoToTransitionTo) {
-      transitionToNext(commitTransition);
-    }
-  }, [currentPhoto, nextPhoto, transitionToNext, preloadNextPhoto, commitTransition]);
-
-  const switchPhotosAfterAnimation = useCallback((direction: 'left' | 'right') => {
-    const action = direction === 'right' ? handleSkip : handleDelete;
-    action();
-  }, [handleSkip, handleDelete]);
-
-  const animateOut = (direction: 'left' | 'right') => {
-    const targetX = direction === 'left' ? -screenWidth * 1.5 : screenWidth * 1.5;
-
-    currentTranslateX.value = withTiming(targetX, { duration: 400 });
-    currentRotate.value = withTiming(direction === 'left' ? -30 : 30, { duration: 400 });
-    currentOpacity.value = withTiming(0, { duration: 200 }, (finished) => {
-      if (finished) {
-        scheduleOnRN(switchPhotosAfterAnimation, direction);
-      }
-    });
-  };
-
-  const panGesture = Gesture.Pan()
-    .onUpdate((event) => {
-      currentTranslateX.value = event.translationX;
-      currentRotate.value = event.translationX / 10;
-      currentOpacity.value = 1 - Math.abs(event.translationX) / (screenWidth * 0.8);
-    })
-    .onEnd((event) => {
-      const shouldSwipe = Math.abs(event.translationX) > SWIPE_THRESHOLD;
-
-      if (shouldSwipe) {
-        const direction = event.translationX > 0 ? 'right' : 'left';
-        scheduleOnRN(animateOut, direction);
-      } else {
-        currentTranslateX.value = withSpring(0);
-        currentRotate.value = withSpring(0);
-        currentOpacity.value = withSpring(1);
-      }
-    });
-
-  const currentPhotoStyle = useAnimatedStyle(() => {
-    return {
-      transform: [
-        { translateX: currentTranslateX.value },
-        { rotate: `${currentRotate.value}deg` },
-      ],
-      opacity: currentOpacity.value,
-      zIndex: showNext.value === 0 ? 2 : 1,
-    };
-  });
-
-  const nextPhotoStyle = useAnimatedStyle(() => {
-    return {
-      transform: [
-        { translateY: nextTranslateY.value },
-      ],
-      opacity: nextOpacity.value,
-      zIndex: showNext.value === 1 ? 2 : 1,
-    };
-  });
+    advance();
+  }, [currentPhoto, advance]);
 
   if (permissionStatus !== MediaLibrary.PermissionStatus.GRANTED) {
     return (
@@ -313,8 +200,8 @@ export default function RandomPhotoPicker() {
         <ThemedText style={styles.centerText}>
           {permissionStatus === null ? 'Checking permissions...' : 'Photo access required'}
         </ThemedText>
-        <TouchableOpacity style={styles.button} onPress={requestPermissions}>
-          <ThemedText style={styles.buttonText}>Grant Permission</ThemedText>
+        <TouchableOpacity style={styles.permissionButton} onPress={requestPermissions}>
+          <ThemedText style={styles.permissionButtonText}>Grant Permission</ThemedText>
         </TouchableOpacity>
       </ThemedView>
     );
@@ -328,71 +215,73 @@ export default function RandomPhotoPicker() {
     );
   }
 
-
   if (hasError || !currentPhoto) {
     return (
       <ThemedView style={styles.container}>
         <ThemedText style={styles.centerText}>
           {hasError ? 'No photos found' : 'No photo selected'}
         </ThemedText>
-        <TouchableOpacity style={[styles.button, styles.retryButton]} onPress={initializePhotos}>
-          <ThemedText style={styles.buttonText}>Load Photos</ThemedText>
+        <TouchableOpacity style={[styles.permissionButton, { backgroundColor: '#34C759' }]} onPress={initializePhotos}>
+          <ThemedText style={styles.permissionButtonText}>Load Photos</ThemedText>
         </TouchableOpacity>
       </ThemedView>
     );
   }
 
-  return (
-    <ThemedView style={styles.container}>
-      <View style={styles.photoStackContainer}>
-        {/* Current Photo */}
-        {currentPhoto && (
-          <GestureDetector gesture={panGesture}>
-            <Animated.View style={[styles.photoContainer, currentPhotoStyle]}>
-              <Image
-                source={{ uri: currentPhoto.asset.uri }}
-                style={styles.photo}
-                contentFit="contain"
-                priority="high"
-              />
-            </Animated.View>
-          </GestureDetector>
-        )}
+  const ready = nextPhotos.length > 0;
 
-        {/* Next Photo (preloaded, slides in from top) */}
-        {nextPhoto && (
-          <Animated.View style={[styles.photoContainer, styles.nextPhotoContainer, nextPhotoStyle]}>
-            <Image
-              source={{ uri: nextPhoto.asset.uri }}
-              style={styles.photo}
-              contentFit="contain"
-              priority="normal"
-            />
-          </Animated.View>
-        )}
+  return (
+    <ThemedView style={styles.root}>
+      {/* Photo */}
+      <View style={styles.photoWrapper}>
+        <Image
+          source={{ uri: currentPhoto.asset.uri }}
+          style={styles.photo}
+          contentFit="contain"
+          priority="high"
+        />
       </View>
 
-      {currentPhoto?.info && (
-        <ThemedText style={styles.photoTimeText}>
+      {/* Date */}
+      {currentPhoto.info && (
+        <ThemedText style={styles.dateText}>
           {formatTime(currentPhoto.info.creationTime)}
         </ThemedText>
       )}
 
-      <View style={styles.instructionsContainer}>
-        <View style={styles.instructionRow}>
-          <View style={[styles.instructionDot, styles.deleteDot]} />
-          <ThemedText style={styles.instructionText}>Swipe left to delete</ThemedText>
-        </View>
-        <View style={styles.instructionRow}>
-          <View style={[styles.instructionDot, styles.keepDot]} />
-          <ThemedText style={styles.instructionText}>Swipe right to keep</ThemedText>
-        </View>
+      {/* Action buttons */}
+      <View style={styles.buttonRow}>
+        <TouchableOpacity
+          style={[styles.actionButton, styles.deleteButton, !ready && styles.buttonDisabled]}
+          onPress={handleDelete}
+          activeOpacity={0.75}
+          disabled={!ready}
+        >
+          <IconSymbol name="trash" size={32} color="#fff" weight="semibold" />
+        </TouchableOpacity>
+
+        <TouchableOpacity
+          style={[styles.actionButton, styles.keepButton, !ready && styles.buttonDisabled]}
+          onPress={handleKeep}
+          activeOpacity={0.75}
+          disabled={!ready}
+        >
+          <IconSymbol name="checkmark" size={32} color="#fff" weight="semibold" />
+        </TouchableOpacity>
       </View>
     </ThemedView>
   );
 }
 
 const styles = StyleSheet.create({
+  root: {
+    flex: 1,
+    alignItems: 'center',
+    paddingTop: 16,
+    paddingBottom: 40,
+    paddingHorizontal: 20,
+    gap: 16,
+  },
   container: {
     flex: 1,
     alignItems: 'center',
@@ -400,75 +289,61 @@ const styles = StyleSheet.create({
     padding: 20,
     gap: 20,
   },
+  photoWrapper: {
+    flex: 1,
+    width: '100%',
+    borderRadius: 16,
+    overflow: 'hidden',
+  },
   photo: {
     width: '100%',
     height: '100%',
-    borderRadius: 12,
   },
-  button: {
+  dateText: {
+    fontSize: 13,
+    opacity: 0.6,
+    fontWeight: '500',
+  },
+  buttonRow: {
+    flexDirection: 'row',
+    gap: 32,
+  },
+  actionButton: {
+    width: screenWidth * 0.28,
+    height: screenWidth * 0.28,
+    borderRadius: screenWidth * 0.14,
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.25,
+    shadowRadius: 8,
+    elevation: 6,
+  },
+  deleteButton: {
+    backgroundColor: '#FF3B30',
+  },
+  keepButton: {
+    backgroundColor: '#34C759',
+  },
+  buttonDisabled: {
+    opacity: 0.4,
+  },
+  permissionButton: {
     paddingVertical: 16,
     paddingHorizontal: 24,
     borderRadius: 12,
     alignItems: 'center',
+    backgroundColor: '#007AFF',
   },
-  retryButton: {
-    backgroundColor: '#34C759',
-  },
-  buttonText: {
+  permissionButtonText: {
     fontWeight: '600',
     fontSize: 16,
+    color: '#fff',
   },
   centerText: {
     textAlign: 'center',
     fontSize: 16,
     marginBottom: 16,
-  },
-  photoStackContainer: {
-    position: 'relative',
-    width: screenWidth - 40,
-    height: screenWidth - 40,
-  },
-  photoContainer: {
-    position: 'absolute',
-    alignItems: 'center',
-    justifyContent: 'center',
-    width: '100%',
-    height: '100%',
-  },
-  nextPhotoContainer: {
-    // Next photo starts positioned above the screen
-    top: 0,
-    left: 0,
-  },
-  instructionsContainer: {
-    alignItems: 'center',
-    gap: 8,
-  },
-  instructionRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-  },
-  instructionDot: {
-    width: 12,
-    height: 12,
-    borderRadius: 6,
-  },
-  deleteDot: {
-    backgroundColor: '#FF3B30',
-  },
-  keepDot: {
-    backgroundColor: '#34C759',
-  },
-  instructionText: {
-    fontSize: 14,
-    opacity: 0.7,
-  },
-  photoTimeText: {
-    textAlign: 'center',
-    fontSize: 14,
-    opacity: 0.8,
-    marginTop: 8,
-    fontWeight: '500',
   },
 });
