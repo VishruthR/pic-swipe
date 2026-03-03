@@ -11,7 +11,7 @@ import { ThemedView } from './themed-view';
 
 const { width: screenWidth } = Dimensions.get('window');
 const PHOTO_INDEX_KEY = '@photo_index';
-const PRELOAD_AHEAD = 2;
+const PRELOAD_AHEAD = 5;
 
 const formatTime = (timestamp: number): string => {
   const date = new Date(timestamp);
