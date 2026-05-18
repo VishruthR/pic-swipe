@@ -45,7 +45,7 @@ export default function RandomPhotoPicker() {
         const result = await MediaLibrary.getAssetsAsync({
           mediaType: 'photo',
           first: 1,
-          sortBy: ['creationTime', true],
+          sortBy: [[MediaLibrary.SortBy.creationTime, true]],
         });
         return result.assets[0] || null;
       }
