@@ -100,7 +100,6 @@ export default function RandomPhotoPicker() {
         const idx = fromIndex + existing.length + newPhotos.length + 1;
         const photo = await loadPhotoData(idx);
         if (!photo) break;
-        Image.prefetch(photo.asset.uri);
         newPhotos.push(photo);
       }
 
@@ -241,6 +240,7 @@ export default function RandomPhotoPicker() {
           source={{ uri: currentPhoto.asset.uri }}
           style={styles.photo}
           contentFit="contain"
+          cachePolicy="memory"
           priority="high"
         />
       </View>
