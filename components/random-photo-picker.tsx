@@ -1,3 +1,4 @@
+import { usePhotoNavigation } from '@/context/photo-navigation-context';
 import { useMediaLibraryPermissions } from '@/hooks/use-media-library-permissions';
 import { TrashStorage } from '@/utils/trash-storage';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -30,6 +31,7 @@ interface PhotoData {
 }
 
 export default function RandomPhotoPicker() {
+  const { resetKey } = usePhotoNavigation();
   const [currentPhoto, setCurrentPhoto] = useState<PhotoData | null>(null);
   const [nextPhotos, setNextPhotos] = useState<PhotoData[]>([]);
   const [loading, setLoading] = useState(false);
@@ -38,6 +40,7 @@ export default function RandomPhotoPicker() {
 
   const isLoadingNext = useRef(false);
   const currentIndexRef = useRef(0);
+  const isFirstRender = useRef(true);
 
   const getPhotoAtIndex = useCallback(async (index: number): Promise<MediaLibrary.Asset | null> => {
     try {
@@ -174,6 +177,19 @@ export default function RandomPhotoPicker() {
       fillPreloadQueue(currentIndexRef.current, nextPhotos);
     }
   }, [nextPhotos, fillPreloadQueue, initialized]);
+
+  // Re-initialize when the date picker commits a new starting position.
+  // Skip the first render since initializePhotos already runs via onGranted.
+  useEffect(() => {
+    if (isFirstRender.current) {
+      isFirstRender.current = false;
+      return;
+    }
+    setInitialized(false);
+    setNextPhotos([]);
+    isLoadingNext.current = false;
+    initializePhotos();
+  }, [resetKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const advance = useCallback(() => {
     if (nextPhotos.length === 0) return false;
